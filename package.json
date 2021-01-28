@@ -22,6 +22,7 @@
   "homepage": "https://github.com/elpatronaco/pccomponentes-buy-bot#readme",
   "dependencies": {
     "chromedriver": "^87.0.4",
+    "puppeteer": "^5.5.0",
     "selenium-webdriver": "^4.0.0-alpha.8",
     "telegraf": "^4.0.1",
     "ts-node": "^9.1.1",
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@types/chromedriver": "^81.0.0",
     "@types/node-fetch": "^2.5.7",
+    "@types/puppeteer": "^5.4.2",
     "@types/selenium-webdriver": "^4.0.10"
   }
 }

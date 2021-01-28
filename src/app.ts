@@ -4,6 +4,7 @@ import { WebDriver, Builder, By, Key, WebElementCondition, until } from 'seleniu
 import chrome from 'selenium-webdriver/chrome'
 import { Telegraf } from 'telegraf'
 import { elementIsDisabled } from 'selenium-webdriver/lib/until'
+import puppeteer from 'puppeteer'
 
 chrome.setDefaultService(new chrome.ServiceBuilder(chromedriver.path).build())
 
@@ -33,97 +34,99 @@ export default class Bot {
   async run() {
     try {
       // this creates a new chrome window
-      const driver = await new Builder().forBrowser('chrome').build()
-      await driver.sleep(1000)
-      await this.login(driver)
-      await this.runItem(driver)
-      await this.buyItem(driver)
+      const browser = await puppeteer.launch({ headless: !this.debug, defaultViewport: null })
+      const page = await browser.newPage()
+      // await this.login(page)
+      await this.runItem(page)
+      // await this.buyItem(driver)
     } catch (err) {
       console.error('ERROR NOT CAUGHT WHILE RUNNING BOT. MORE INFO BELOW')
       console.error(err)
     }
   }
 
-  async login(driver: WebDriver) {
-    await driver
-      .navigate()
-      .to('https://www.pccomponentes.com/login')
+  async login(page: puppeteer.Page) {
+    await page
+      .goto('https://www.pccomponentes.com/login', { waitUntil: 'networkidle2' })
       .then(async () => {
         // fills the form and logs in
-        await driver
-          .findElement(By.css("input[data-cy='email']"))
-          .then(value => value.sendKeys(this.email.trim()))
-        await driver
-          .findElement(By.css("input[data-cy='password']"))
-          .then(value => value.sendKeys(this.password.trim(), Key.RETURN))
-        await driver.sleep(3000)
+        await page.$("input[data-cy='email']").then(async value => {
+          await value?.focus()
+          await page.keyboard.type(this.email.trim())
+        })
+        await page.$("input[data-cy='password']").then(async value => {
+          await value?.focus()
+          await page.keyboard.type(this.password.trim())
+          await page.keyboard.press('Enter')
+        })
+        await page.waitForNavigation({ waitUntil: 'networkidle2' })
         // checks if logged in
-        if (!((await driver.getCurrentUrl()) == 'https://www.pccomponentes.com/'))
+        if (!(page.url() == 'https://www.pccomponentes.com/'))
           throw Error(`ERROR: Login to account with email ${this.email} failed`)
         console.log(`Successfully logged in as ${this.email}`)
       })
   }
 
-  async runItem(driver: WebDriver) {
+  async runItem(page: puppeteer.Page) {
     // navigates to the item link provided
     let stock: boolean = false
     let price: number | undefined
     while (!stock) {
       // this loop will play till stock is available, then to the next step
-      await driver.sleep(this.refreshRate || 5000)
-      await driver
-        .navigate()
-        .to(this.link)
-        .then(async () => {
-          // when item is not in stock, the button that informs you that there's no stock has the id 'notify-me'. If it's found there's not stock.
-          // Else, proceeds to check the price and compare it to the maximum price if provided
-          await driver
-            .findElement(By.id('btnsWishAddBuy'))
-            .then(async () => {
-              await driver
-                .findElement(By.id('notify-me'))
-                .then(() =>
-                  console.log(`Product is not yet in stock (${new Date().toUTCString()})`)
-                )
-                .catch(async () => {
-                  await driver
-                    .findElement(By.id('precio-main'))
-                    .then(
-                      async value => (price = parseFloat(await value.getAttribute('data-price')))
-                    )
-                    .catch(() => console.error("Couldn't find item price"))
-                  // checks if current price is below max price before continuing
-                  if (
-                    this.maxPrice === undefined ||
-                    (price && this.maxPrice && price <= this.maxPrice)
-                  ) {
-                    stock = true
-                    console.log(`PRODUCT IN STOCK! Starting buy process`)
-                    // this.sendMsg('IN STOCK! ATTEMPTING TO BUY')
-                  } else {
-                    console.log(
-                      `Price is above max. Max price set - ${this.maxPrice}€. Current price - ${price}€`
-                    )
-                  }
-                })
+      await page.waitForTimeout(this.refreshRate || 5000)
+      await page.goto(this.link).then(async () => {
+        // when item is not in stock, the button that informs you that there's no stock has the id 'notify-me'. If it's found there's not stock.
+        const buyButtons = await page.$('#btnsWishAddBuy')
+        const notifyMeButton = await page.$('#notify-me')
+
+        if (buyButtons !== null && notifyMeButton === null) {
+          price = Number(
+            (await page.evaluate(() =>
+              document.getElementById('precio-main')!.getAttribute('data-price')
+            )) ?? undefined
+          )
+          console.log(`PRECIO: ${price}`)
+          /* await page.evaluate(() => {
+            // price = Number(document.getElementById('precio-id')?.getAttribute('data-price'))
+          }) */
+          await page
+            .$("div[id='precio-main']")
+            .then(async value => {
+              price = Number((await value?.getProperty('data-price'))?.jsonValue()) ?? undefined
+              console.log(`PRECIO: ${price}`)
             })
-            .catch(() => console.log(`Product is not yet in stock (${new Date().toUTCString()})`))
-        })
+            .catch(() => {
+              console.log('Current price not found. Buying anyway')
+            })
+          // checks if current price is below max price before continuing
+          if (!this.maxPrice || (this.maxPrice && price && price <= this.maxPrice)) {
+            stock = true
+            console.log(`PRODUCT IN STOCK! Starting buy process`)
+          } else {
+            console.log(
+              `Price is above max. Max price set - ${this.maxPrice}€. Current price - ${price}€`
+            )
+          }
+        } else {
+          // Else, proceeds to check the price and compare it to the maximum price if provided
+          console.log(`Product is not yet in stock (${new Date().toUTCString()})`)
+        }
+      })
     }
   }
 
-  async buyItem(driver: WebDriver) {
-    await driver
-      .findElement(By.id('contenedor-principal'))
-      .then(
-        async value =>
-          await driver
-            .navigate()
-            .to(`https://www.pccomponentes.com/cart/addItem/${await value.getAttribute('data-id')}`)
-      )
+  async buyItem(page: puppeteer.Page) {
+    /*await page
+      .$("div[id='contenedor-principal']")
+      .then(async value => {
+        await page.goto(
+          `https://www.pccomponentes.com/cart/addItem/${await value?.getProperty('data-id')}`,
+          { waitUntil: 'networkidle2' }
+        )
+      })
       .catch(async () => {
         console.log('Not found product id. Forcing click of all buy buttons')
-        const buyButtons = await driver.findElements(By.className('buy-button'))
+        const buyButtons = await page.$$('.buy-button')
         let clickedButton = false
         buyButtons.forEach(async buyButton => {
           if (!clickedButton)
@@ -135,8 +138,9 @@ export default class Bot {
             }
         })
       })
+    await page.goto('https://www.pccomponentes.com/cart/order', { waitUntil: 'networkidle2' })
 
-    await driver.navigate().to('https://www.pccomponentes.com/cart/order')
+    await page.waitForSelector('.card-name').then(async value => {})
 
     // checks if the account has an added card, if not it adds the provided one
     await driver.wait(until.elementsLocated(By.className('h5 card-name'))).then(async value => {
@@ -167,7 +171,7 @@ export default class Bot {
       } catch {}
     }
 
-    for (var i = 0; i < 50; i++) console.log('COMPRADO')
+    for (var i = 0; i < 50; i++) console.log('COMPRADO')*/
   }
 
   async addCard(driver: WebDriver) {
